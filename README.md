@@ -1,142 +1,115 @@
 # AI Shared Memory
 
-Local shared memory for AI tools. Keep project context across Cursor, VS Code Claude, and Copilot workflows without losing your previous brain when you switch tools.
+One local place to remember what you did in Cursor, VS Code, or any AI assistant. Switch tools and paste **one block of context** instead of re-explaining everything.
 
-Everything is local-first and stored on your machine.
+- **All data stays on your computer** (`~/.ai-shared-memory/memory.db`)
+- **Each git repo / folder is its own “project”** — you usually **don’t need `--project`**
 
-## What It Does
+---
 
-- Stores memory in a single local database
-- Keeps memory isolated per project (`--project`)
-- Auto-ingests Cursor transcript history
-- Returns a handoff context you can paste into another tool
-
-## Storage Location
-
-- Default DB path: `~/.ai-shared-memory/memory.db`
-- Optional override: set `AI_MEMORY_DB_PATH`
-
-## Quick Start
-
-1. Install global command + initialize local DB:
+## Setup (first time only)
 
 ```bash
+cd path/to/this/repo
 python3 memory_cli.py install
 python3 memory_cli.py init
 ```
 
-If needed, add this to your shell profile:
+Put the command on your PATH (add to `~/.zshrc` or `~/.bashrc`):
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-2. Start automatic import from Cursor transcripts:
+Open a **new** terminal, then you can run `aimemory` from anywhere.
+
+---
+
+## Daily use (3 commands)
+
+**1. From your code project folder**, start watching Cursor (picks up chat transcripts automatically):
 
 ```bash
-aimemory auto-import-cursor --project my-app --watch
+cd ~/your-real-project
+aimemory watch-cursor
 ```
 
-This continuously imports Cursor chat transcript entries into the shared memory DB.
+Leave this terminal open while you work.
 
-3. Save memory events manually from any tool session (optional but useful for non-Cursor tools):
+**2. When you open another AI (Claude, Copilot, Cursor again, etc.)**, copy your shared memory:
 
 ```bash
-python3 memory_cli.py save-event \
-  --project my-app \
-  --tool cursor \
-  --type decision \
-  --content "Use Redis cache for response speed" \
-  --metadata '{"files":["server/cache.ts"],"branch":"feature/cache"}'
+cd ~/your-real-project
+aimemory context
 ```
 
-4. Track open tasks:
+Paste the output as the first message or “context” in the new tool.
+
+**3. If something important isn’t captured automatically**, save one line:
 
 ```bash
-python3 memory_cli.py add-task \
-  --project my-app \
-  --tool claude-vscode \
-  --title "Add retry logic for API client" \
-  --status in_progress
+aimemory save-event -c "Decided: use Postgres, not SQLite for prod"
 ```
 
-5. Recall context when starting another tool:
+Optional: `-y decision` or `-y goal` instead of the default note (`-y` = memory **type**).
+
+---
+
+## How the app knows which project you mean
+
+Order of priority:
+
+1. `aimemory context -p my-name` (manual)
+2. Environment variable `export AI_MEMORY_PROJECT=my-name`
+3. **Git repo folder name** (if you’re inside a git repo)
+4. **Current folder name**
+
+So: **always `cd` into your real project** before `watch-cursor` / `context` / `save-event`.
+
+---
+
+## All commands (short)
+
+| Command | What it does |
+|--------|----------------|
+| `install` | Creates `~/.local/bin/aimemory` |
+| `init` | Creates the database |
+| `watch-cursor` | Keeps importing Cursor transcripts |
+| `context` | **Paste-ready** text for your next AI |
+| `recall` | Same data as JSON (for scripts) |
+| `save-event` | Save a line of memory (`-c "..."`) |
+| `add-task` / `update-task` | Optional task list |
+
+Help: `aimemory -h` and `aimemory context -h`.
+
+---
+
+## What is automatic today?
+
+| Tool | Automatic? |
+|------|------------|
+| **Cursor** | Yes — use `watch-cursor` |
+| **VS Code Claude / Copilot** | Not yet — use `save-event` or future adapters |
+
+---
+
+## Optional: custom database path
 
 ```bash
-python3 memory_cli.py recall --project my-app --pretty-context
+export AI_MEMORY_DB_PATH="$HOME/Documents/my-memory.db"
 ```
 
-## Suggested Workflow
+---
 
-- Start one terminal watcher:
-  - `aimemory auto-import-cursor --project my-app --watch`
-- Before starting a new AI tool session:
-  - run `aimemory recall --project my-app --pretty-context`
-  - paste output as first context in the new tool
-- During session (especially for tools without transcript access):
-  - save key decisions/goals/changes with `aimemory save-event`
-- When tasks move:
-  - use `aimemory add-task` and `aimemory update-task`
+## Security
 
-## Project Isolation (Important)
+- Memory is **only on your machine**.
+- Don’t paste API keys or passwords into `save-event`; add filters later if you need them.
 
-Memory is separated by `--project`.
-
-Examples:
-
-```bash
-aimemory recall --project ecommerce-app --pretty-context
-aimemory recall --project portfolio-site --pretty-context
-```
-
-These will return different memory snapshots from the same DB.
-
-## Event Types (recommended)
-
-- `goal`: current objective
-- `decision`: architecture or approach decisions
-- `change`: important code changes
-- `note`: extra context
-
-## Commands
-
-- `init`
-- `install`
-- `save-event`
-- `add-task`
-- `update-task`
-- `recall`
-- `auto-import-cursor`
-
-Run help:
-
-```bash
-python3 memory_cli.py -h
-python3 memory_cli.py recall -h
-```
-
-or after install:
-
-```bash
-aimemory -h
-```
-
-## Current Auto-Capture Coverage
-
-- Automatic now: Cursor transcript ingestion (`auto-import-cursor`)
-- For VS Code Claude / GitHub Copilot:
-  - there is no stable universal OS-level API to capture every chat automatically from all tools
-  - use `save-event` or add tool-specific adapter scripts/extensions next
+---
 
 ## Roadmap
 
-- VS Code Claude adapter
-- GitHub Copilot adapter
-- Auto-detect project key from current folder
-- Secret filtering for sensitive patterns before save
-
-## Security Notes
-
-- This is local-first and stores memory on your machine only.
-- Still avoid storing secrets in event content.
-- You can later add content filters for API keys and `.env` patterns.
+- VS Code / Copilot adapters
+- Strip secrets before save
+- Smarter summaries for long histories

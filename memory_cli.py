@@ -26,6 +26,27 @@ LOCAL_BIN_DIR = Path.home() / ".local" / "bin"
 CURSOR_PROJECTS_DIR = Path.home() / ".cursor" / "projects"
 
 
+def find_git_root(start: Path | None = None) -> Path | None:
+    cur = (start or Path.cwd()).resolve()
+    for parent in [cur, *cur.parents]:
+        if (parent / ".git").exists():
+            return parent
+    return None
+
+
+def resolve_project_id(explicit: str | None) -> str:
+    """Pick project id: --project / -p, then AI_MEMORY_PROJECT, then git folder name, then cwd name."""
+    if explicit and explicit.strip():
+        return explicit.strip()
+    env = os.environ.get("AI_MEMORY_PROJECT", "").strip()
+    if env:
+        return env
+    git_root = find_git_root()
+    if git_root:
+        return git_root.name
+    return Path.cwd().resolve().name
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -88,6 +109,7 @@ def init_db() -> None:
 
 def save_event(args: argparse.Namespace) -> None:
     init_db()
+    project = resolve_project_id(args.project)
 
     metadata: Dict[str, Any] = {}
     if args.metadata:
@@ -106,7 +128,7 @@ def save_event(args: argparse.Namespace) -> None:
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
-                args.project,
+                project,
                 args.tool,
                 args.type,
                 args.content,
@@ -120,7 +142,7 @@ def save_event(args: argparse.Namespace) -> None:
             {
                 "ok": True,
                 "action": "save_event",
-                "project": args.project,
+                "project": project,
                 "tool": args.tool,
                 "event_type": args.type,
                 "created_at": created_at,
@@ -132,6 +154,7 @@ def save_event(args: argparse.Namespace) -> None:
 
 def add_task(args: argparse.Namespace) -> None:
     init_db()
+    project = resolve_project_id(args.project)
     now = utc_now()
     with get_conn() as conn:
         cursor = conn.execute(
@@ -139,7 +162,7 @@ def add_task(args: argparse.Namespace) -> None:
             INSERT INTO tasks(project_id, title, status, source_tool, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (args.project, args.title, args.status, args.tool, now, now),
+            (project, args.title, args.status, args.tool, now, now),
         )
         task_id = cursor.lastrowid
 
@@ -149,7 +172,7 @@ def add_task(args: argparse.Namespace) -> None:
                 "ok": True,
                 "action": "add_task",
                 "task_id": task_id,
-                "project": args.project,
+                "project": project,
                 "status": args.status,
             },
             indent=2,
@@ -159,6 +182,7 @@ def add_task(args: argparse.Namespace) -> None:
 
 def update_task(args: argparse.Namespace) -> None:
     init_db()
+    project = resolve_project_id(args.project)
     now = utc_now()
     with get_conn() as conn:
         cursor = conn.execute(
@@ -167,11 +191,11 @@ def update_task(args: argparse.Namespace) -> None:
             SET status = ?, updated_at = ?
             WHERE id = ? AND project_id = ?
             """,
-            (args.status, now, args.id, args.project),
+            (args.status, now, args.id, project),
         )
         if cursor.rowcount == 0:
             raise SystemExit(
-                f"Task {args.id} not found for project '{args.project}'."
+                f"Task {args.id} not found for project '{project}'."
             )
 
     print(
@@ -180,7 +204,7 @@ def update_task(args: argparse.Namespace) -> None:
                 "ok": True,
                 "action": "update_task",
                 "task_id": args.id,
-                "project": args.project,
+                "project": project,
                 "status": args.status,
             },
             indent=2,
@@ -190,6 +214,7 @@ def update_task(args: argparse.Namespace) -> None:
 
 def recall(args: argparse.Namespace) -> None:
     init_db()
+    project = resolve_project_id(args.project)
     with get_conn() as conn:
         events = conn.execute(
             """
@@ -199,7 +224,7 @@ def recall(args: argparse.Namespace) -> None:
             ORDER BY created_at DESC
             LIMIT ?
             """,
-            (args.project, args.limit_events),
+            (project, args.limit_events),
         ).fetchall()
 
         tasks = conn.execute(
@@ -211,7 +236,7 @@ def recall(args: argparse.Namespace) -> None:
             ORDER BY updated_at DESC
             LIMIT ?
             """,
-            (args.project, args.limit_tasks),
+            (project, args.limit_tasks),
         ).fetchall()
 
     normalized_events: List[Dict[str, Any]] = []
@@ -243,16 +268,22 @@ def recall(args: argparse.Namespace) -> None:
     ]
 
     output = {
-        "project": args.project,
+        "project": project,
         "memory_db": str(get_db_path()),
         "open_tasks": normalized_tasks,
         "recent_events": normalized_events,
     }
 
-    if args.pretty_context:
+    if getattr(args, "pretty_context", False):
         print(render_context_text(output))
     else:
         print(json.dumps(output, indent=2))
+
+
+def context_command(args: argparse.Namespace) -> None:
+    """Same as recall --pretty-context (easy handoff text)."""
+    args.pretty_context = True
+    recall(args)
 
 
 def install_command(_args: argparse.Namespace) -> None:
@@ -277,8 +308,9 @@ def install_command(_args: argparse.Namespace) -> None:
                 "launcher": str(launcher_path),
                 "db": str(get_db_path()),
                 "next": [
-                    "Ensure ~/.local/bin is in PATH",
-                    "Run: aimemory auto-import-cursor --project <name> --watch",
+                    "Add to PATH: export PATH=\"$HOME/.local/bin:$PATH\"",
+                    "From your repo: aimemory watch-cursor",
+                    "Switch tool: aimemory context",
                 ],
             },
             indent=2,
@@ -384,6 +416,7 @@ def import_cursor_transcript_file(
 
 def auto_import_cursor(args: argparse.Namespace) -> None:
     init_db()
+    project = resolve_project_id(args.project)
     root = Path(args.cursor_projects_dir).expanduser()
     if not root.exists():
         raise SystemExit(f"Cursor projects directory not found: {root}")
@@ -393,12 +426,12 @@ def auto_import_cursor(args: argparse.Namespace) -> None:
         total = 0
         with get_conn() as conn:
             for file_path in files:
-                total += import_cursor_transcript_file(conn, args.project, file_path)
+                total += import_cursor_transcript_file(conn, project, file_path)
         return total
 
     if args.watch:
         print(
-            f"Watching Cursor transcripts in {root} every {args.interval}s for project '{args.project}'."
+            f"Watching Cursor transcripts in {root} every {args.interval}s for project '{project}'."
         )
         try:
             while True:
@@ -416,7 +449,7 @@ def auto_import_cursor(args: argparse.Namespace) -> None:
             {
                 "ok": True,
                 "action": "auto_import_cursor",
-                "project": args.project,
+                "project": project,
                 "imported_entries": imported,
                 "cursor_projects_dir": str(root),
             },
@@ -425,14 +458,20 @@ def auto_import_cursor(args: argparse.Namespace) -> None:
     )
 
 
+def watch_cursor_command(args: argparse.Namespace) -> None:
+    """Shorthand: auto-import Cursor with --watch on."""
+    args.watch = True
+    auto_import_cursor(args)
+
+
 def render_context_text(payload: Dict[str, Any]) -> str:
     lines: List[str] = []
     lines.append(f"Project: {payload['project']}")
-    lines.append("Shared Memory Snapshot")
+    lines.append("--- Shared memory (paste into your AI) ---")
     lines.append("")
 
     open_tasks = payload.get("open_tasks", [])
-    lines.append("Open Tasks:")
+    lines.append("Open tasks:")
     if not open_tasks:
         lines.append("- none")
     else:
@@ -443,7 +482,7 @@ def render_context_text(payload: Dict[str, Any]) -> str:
     lines.append("")
 
     events = payload.get("recent_events", [])
-    lines.append("Recent Events:")
+    lines.append("Recent notes / chat imports:")
     if not events:
         lines.append("- none")
     else:
@@ -452,48 +491,74 @@ def render_context_text(payload: Dict[str, Any]) -> str:
                 f"- {event['created_at']} | {event['tool']} | {event['type']} | {event['content']}"
             )
     lines.append("")
-    lines.append("Use this context as the previous brain before responding.")
+    lines.append("(Continue from here. This is memory from other sessions/tools.)")
 
     return "\n".join(lines)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Local shared AI memory CLI (single machine, system storage)."
+        description=(
+            "Shared local AI memory: one database per machine, separate memory per project. "
+            "Run from your repo folder — project name is auto-detected (git folder or cwd), "
+            "or set AI_MEMORY_PROJECT / use -p."
+        )
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    init_cmd = sub.add_parser("init", help="Initialize local memory database")
+    proj_help = (
+        "Project id (default: AI_MEMORY_PROJECT, else git root folder name, else cwd name)"
+    )
+
+    init_cmd = sub.add_parser("init", help="Create local database if missing")
     init_cmd.set_defaults(func=lambda _args: init_db())
 
     install_cmd = sub.add_parser(
-        "install", help="Install global 'aimemory' command in ~/.local/bin"
+        "install", help="Install 'aimemory' in ~/.local/bin"
     )
     install_cmd.set_defaults(func=install_command)
 
-    save_cmd = sub.add_parser("save-event", help="Save one memory event")
-    save_cmd.add_argument("--project", required=True, help="Project identifier")
-    save_cmd.add_argument("--tool", required=True, help="Tool name (cursor/claude/copilot)")
-    save_cmd.add_argument("--type", required=True, help="Event type (goal/decision/change/note)")
-    save_cmd.add_argument("--content", required=True, help="Event content")
+    save_cmd = sub.add_parser("save-event", help="Save one line of memory")
+    save_cmd.add_argument("-p", "--project", default=None, help=proj_help)
+    save_cmd.add_argument(
+        "-t",
+        "--tool",
+        default="manual",
+        help="Where this came from (default: manual)",
+    )
+    save_cmd.add_argument(
+        "-y",
+        "--type",
+        default="note",
+        choices=["goal", "decision", "change", "note"],
+        help="Kind of memory (default: note)",
+    )
+    save_cmd.add_argument(
+        "-c",
+        "--content",
+        required=True,
+        help="What to remember",
+    )
     save_cmd.add_argument(
         "--metadata",
         default="{}",
-        help='Optional JSON object, e.g. \'{"files":["app.py"],"branch":"main"}\'',
+        help='Optional JSON, e.g. {"branch":"main"}',
     )
     save_cmd.set_defaults(func=save_event)
 
-    add_task_cmd = sub.add_parser("add-task", help="Add a tracked task")
-    add_task_cmd.add_argument("--project", required=True, help="Project identifier")
-    add_task_cmd.add_argument("--tool", required=True, help="Source tool")
+    add_task_cmd = sub.add_parser("add-task", help="Add a task")
+    add_task_cmd.add_argument("-p", "--project", default=None, help=proj_help)
+    add_task_cmd.add_argument(
+        "-t", "--tool", default="manual", help="Source tool (default: manual)"
+    )
     add_task_cmd.add_argument("--title", required=True, help="Task title")
     add_task_cmd.add_argument(
         "--status", choices=["open", "in_progress", "done"], default="open"
     )
     add_task_cmd.set_defaults(func=add_task)
 
-    upd_task_cmd = sub.add_parser("update-task", help="Update task status")
-    upd_task_cmd.add_argument("--project", required=True, help="Project identifier")
+    upd_task_cmd = sub.add_parser("update-task", help="Change task status")
+    upd_task_cmd.add_argument("-p", "--project", default=None, help=proj_help)
     upd_task_cmd.add_argument("--id", required=True, type=int, help="Task ID")
     upd_task_cmd.add_argument(
         "--status", required=True, choices=["open", "in_progress", "done"]
@@ -501,40 +566,67 @@ def build_parser() -> argparse.ArgumentParser:
     upd_task_cmd.set_defaults(func=update_task)
 
     recall_cmd = sub.add_parser(
-        "recall", help="Recall shared memory context for startup prompt"
+        "recall", help="Print memory as JSON (or use 'context' for paste-ready text)"
     )
-    recall_cmd.add_argument("--project", required=True, help="Project identifier")
+    recall_cmd.add_argument("-p", "--project", default=None, help=proj_help)
     recall_cmd.add_argument("--limit-events", type=int, default=12)
     recall_cmd.add_argument("--limit-tasks", type=int, default=10)
     recall_cmd.add_argument(
         "--pretty-context",
         action="store_true",
-        help="Print concise prompt-ready text context",
+        help="Plain text you can paste into an AI chat",
     )
     recall_cmd.set_defaults(func=recall)
 
+    ctx_cmd = sub.add_parser(
+        "context",
+        help="Print paste-ready memory (shortcut for recall --pretty-context)",
+    )
+    ctx_cmd.add_argument("-p", "--project", default=None, help=proj_help)
+    ctx_cmd.add_argument("--limit-events", type=int, default=12)
+    ctx_cmd.add_argument("--limit-tasks", type=int, default=10)
+    ctx_cmd.set_defaults(func=context_command)
+
     auto_import_cmd = sub.add_parser(
         "auto-import-cursor",
-        help="Auto ingest Cursor transcripts into shared memory",
+        help="Import Cursor chat transcripts into memory (add --watch to keep running)",
     )
-    auto_import_cmd.add_argument("--project", required=True, help="Project identifier")
+    auto_import_cmd.add_argument("-p", "--project", default=None, help=proj_help)
     auto_import_cmd.add_argument(
         "--cursor-projects-dir",
         default=str(CURSOR_PROJECTS_DIR),
-        help="Cursor projects directory to scan",
+        help="Cursor ~/.cursor/projects (default)",
     )
     auto_import_cmd.add_argument(
         "--watch",
         action="store_true",
-        help="Keep running and import new entries continuously",
+        help="Keep importing in the background",
     )
     auto_import_cmd.add_argument(
         "--interval",
         type=int,
         default=5,
-        help="Watch polling interval in seconds (watch mode)",
+        help="Seconds between checks (with --watch)",
     )
     auto_import_cmd.set_defaults(func=auto_import_cursor)
+
+    watch_cmd = sub.add_parser(
+        "watch-cursor",
+        help="Same as auto-import-cursor --watch (easiest for daily use)",
+    )
+    watch_cmd.add_argument("-p", "--project", default=None, help=proj_help)
+    watch_cmd.add_argument(
+        "--cursor-projects-dir",
+        default=str(CURSOR_PROJECTS_DIR),
+        help="Cursor projects directory",
+    )
+    watch_cmd.add_argument(
+        "--interval",
+        type=int,
+        default=5,
+        help="Seconds between checks",
+    )
+    watch_cmd.set_defaults(func=watch_cursor_command)
 
     return parser
 
