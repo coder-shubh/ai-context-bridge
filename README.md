@@ -1,8 +1,15 @@
-# Local Shared AI Memory
+# AI Shared Memory
 
-This project gives you one shared memory on your machine, so you can switch between tools (Cursor, Claude in VS Code, Copilot workflows, etc.) and continue from previous context.
+Local shared memory for AI tools. Keep project context across Cursor, VS Code Claude, and Copilot workflows without losing your previous brain when you switch tools.
 
-All data is stored only on local system storage.
+Everything is local-first and stored on your machine.
+
+## What It Does
+
+- Stores memory in a single local database
+- Keeps memory isolated per project (`--project`)
+- Auto-ingests Cursor transcript history
+- Returns a handoff context you can paste into another tool
 
 ## Storage Location
 
@@ -59,7 +66,7 @@ python3 memory_cli.py add-task \
 python3 memory_cli.py recall --project my-app --pretty-context
 ```
 
-## Suggested Tool Workflow
+## Suggested Workflow
 
 - Start one terminal watcher:
   - `aimemory auto-import-cursor --project my-app --watch`
@@ -70,6 +77,19 @@ python3 memory_cli.py recall --project my-app --pretty-context
   - save key decisions/goals/changes with `aimemory save-event`
 - When tasks move:
   - use `aimemory add-task` and `aimemory update-task`
+
+## Project Isolation (Important)
+
+Memory is separated by `--project`.
+
+Examples:
+
+```bash
+aimemory recall --project ecommerce-app --pretty-context
+aimemory recall --project portfolio-site --pretty-context
+```
+
+These will return different memory snapshots from the same DB.
 
 ## Event Types (recommended)
 
@@ -107,6 +127,13 @@ aimemory -h
 - For VS Code Claude / GitHub Copilot:
   - there is no stable universal OS-level API to capture every chat automatically from all tools
   - use `save-event` or add tool-specific adapter scripts/extensions next
+
+## Roadmap
+
+- VS Code Claude adapter
+- GitHub Copilot adapter
+- Auto-detect project key from current folder
+- Secret filtering for sensitive patterns before save
 
 ## Security Notes
 
