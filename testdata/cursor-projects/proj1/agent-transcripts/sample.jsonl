@@ -1,0 +1,2 @@
+{"message":"User asked to implement auth"}
+{"content":"Decision: use JWT with refresh tokens"}
